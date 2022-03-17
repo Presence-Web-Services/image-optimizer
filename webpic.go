@@ -12,9 +12,6 @@ import (
 	"sync"
 
 	"github.com/jdeng/goheif"
-	// "github.com/rwcarlsen/goexif/exif"
-
-	heicexif "github.com/dsoprea/go-heic-exif-extractor"
 )
 
 var pre *string
@@ -112,19 +109,26 @@ func generate(file string) {
 		// }
 		// fmt.Println(metaData.Get(exif.Orientation))
 
-		hemp := new(heicexif.HeicExifMediaParser)
-		mc, err := hemp.Parse(f, 0)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Could not extract exif data from file: %s, ignoring.", file)
-			return
-		}
+		// hemp := new(heicexif.HeicExifMediaParser)
+		// mc, err := hemp.Parse(f, 0)
+		// if err != nil {
+		// 	fmt.Fprintf(os.Stderr, "Could not extract exif data from file: %s, ignoring.", file)
+		// 	return
+		// }
 
-		rootIfd, _, err := mc.Exif()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Could not extract exif data from file: %s, ignoring.", file)
-			return
-		}
-		fmt.Println(rootIfd)
+		// rootIfd, _, err := mc.Exif()
+		// if err != nil {
+		// 	fmt.Fprintf(os.Stderr, "Could not extract exif data from file: %s, ignoring.", file)
+		// 	return
+		// }
+		// cb := func(ifd *exif.Ifd, ite *exif.IfdTagEntry) error {
+		// 	fmt.Println(*ifd)
+		// 	fmt.Println(*ite)
+		// 	return nil
+		// }
+
+		// rootIfd.EnumerateTagsRecursively(cb)
+		// fmt.Println(rootIfd)
 
 		img, err := goheif.Decode(f)
 		if err != nil {
