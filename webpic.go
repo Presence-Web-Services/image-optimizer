@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"flag"
 	"fmt"
 	"image/jpeg"
@@ -13,7 +12,9 @@ import (
 	"sync"
 
 	"github.com/jdeng/goheif"
-	"github.com/rwcarlsen/goexif/exif"
+	// "github.com/rwcarlsen/goexif/exif"
+
+	heicexif "github.com/dsoprea/go-heic-exif-extractor"
 )
 
 var pre *string
@@ -99,17 +100,31 @@ func generate(file string) {
 	case "png":
 		fmt.Println("working with png")
 	case "heic":
-		exifData, err := goheif.ExtractExif(f)
+		// exifData, err := goheif.ExtractExif(f)
+		// if err != nil {
+		// 	fmt.Fprintf(os.Stderr, "Could not extract exif data from file: %s, ignoring.", file)
+		// 	return
+		// }
+		// metaData, err := exif.Decode(bytes.NewReader(exifData))
+		// if err != nil {
+		// 	fmt.Fprintf(os.Stderr, "Could not extract exif data from file: %s, ignoring.", file)
+		// 	return
+		// }
+		// fmt.Println(metaData.Get(exif.Orientation))
+
+		hemp := new(heicexif.HeicExifMediaParser)
+		mc, err := hemp.Parse(f, 0)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Could not extract exif data from file: %s, ignoring.", file)
 			return
 		}
-		metaData, err := exif.Decode(bytes.NewReader(exifData))
+
+		rootIfd, _, err := mc.Exif()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Could not extract exif data from file: %s, ignoring.", file)
 			return
 		}
-		fmt.Println(metaData.Get(exif.Orientation))
+		fmt.Println(rootIfd)
 
 		img, err := goheif.Decode(f)
 		if err != nil {
@@ -124,13 +139,13 @@ func generate(file string) {
 		}
 		defer jf.Close()
 
-		jw, err := newWriterExif(jf, exifData)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Could not create exif writer for file: %s, ignoring.", jpgFile)
-			return
-		}
-		err = jpeg.Encode(jw, img, &jpeg.Options{Quality: *qual})
-		// err = jpeg.Encode(jf, img, &jpeg.Options{Quality: *qual})
+		// jw, err := newWriterExif(jf, exifData)
+		// if err != nil {
+		// 	fmt.Fprintf(os.Stderr, "Could not create exif writer for file: %s, ignoring.", jpgFile)
+		// 	return
+		// }
+		// err = jpeg.Encode(jw, img, &jpeg.Options{Quality: *qual})
+		err = jpeg.Encode(jf, img, &jpeg.Options{Quality: *qual})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Could not encode jpg file: %s, ignoring.", jpgFile)
 			return
