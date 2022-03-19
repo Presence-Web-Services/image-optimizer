@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"image"
 	"image/jpeg"
 	"io"
 	"os"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"sync"
 
+	exif "github.com/dsoprea/go-exif/v3"
+	exifcommon "github.com/dsoprea/go-exif/v3/common"
 	"github.com/jdeng/goheif"
 )
 
@@ -84,12 +87,10 @@ func generate(file string) {
 	fileType := strings.ToLower(strings.Trim(extension, "."))
 	fileName := strings.TrimSuffix(file, extension)
 
-	f, err := os.Open(file)
+	exifByteSlice, err := getOrientationExif(file)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Could not open file: %s, ignoring.", file)
-		return
+		fmt.Fprintf(os.Stderr, "Could not extract orientation data for file %s.", file)
 	}
-	defer f.Close()
 
 	switch fileType {
 	case "jpg":
@@ -97,66 +98,240 @@ func generate(file string) {
 	case "png":
 		fmt.Println("working with png")
 	case "heic":
-		// exifData, err := goheif.ExtractExif(f)
-		// if err != nil {
-		// 	fmt.Fprintf(os.Stderr, "Could not extract exif data from file: %s, ignoring.", file)
-		// 	return
-		// }
-		// metaData, err := exif.Decode(bytes.NewReader(exifData))
-		// if err != nil {
-		// 	fmt.Fprintf(os.Stderr, "Could not extract exif data from file: %s, ignoring.", file)
-		// 	return
-		// }
-		// fmt.Println(metaData.Get(exif.Orientation))
-
-		// hemp := new(heicexif.HeicExifMediaParser)
-		// mc, err := hemp.Parse(f, 0)
-		// if err != nil {
-		// 	fmt.Fprintf(os.Stderr, "Could not extract exif data from file: %s, ignoring.", file)
-		// 	return
-		// }
-
-		// rootIfd, _, err := mc.Exif()
-		// if err != nil {
-		// 	fmt.Fprintf(os.Stderr, "Could not extract exif data from file: %s, ignoring.", file)
-		// 	return
-		// }
-		// cb := func(ifd *exif.Ifd, ite *exif.IfdTagEntry) error {
-		// 	fmt.Println(*ifd)
-		// 	fmt.Println(*ite)
-		// 	return nil
-		// }
-
-		// rootIfd.EnumerateTagsRecursively(cb)
-		// fmt.Println(rootIfd)
-
-		img, err := goheif.Decode(f)
+		fmt.Println("working with heic")
+		img, err := getImageFromHeic(file)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Could not decode file: %s, ignoring.", file)
-			return
+			fmt.Fprintf(os.Stderr, "Could not get image data from HEIC file %s.", file)
 		}
-		jpgFile := fmt.Sprintf("%s.jpg", fileName)
-		jf, err := os.Create(jpgFile)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Could not create jpg file: %s, ignoring.", jpgFile)
-			return
-		}
-		defer jf.Close()
-
-		// jw, err := newWriterExif(jf, exifData)
-		// if err != nil {
-		// 	fmt.Fprintf(os.Stderr, "Could not create exif writer for file: %s, ignoring.", jpgFile)
-		// 	return
-		// }
-		// err = jpeg.Encode(jw, img, &jpeg.Options{Quality: *qual})
-		err = jpeg.Encode(jf, img, &jpeg.Options{Quality: *qual})
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Could not encode jpg file: %s, ignoring.", jpgFile)
-			return
-		}
+		writeJpgFile(fmt.Sprintf("%s.jpg", fileName), exifByteSlice, img)
 	}
 }
 
+// func contains(s []string, e string) bool {
+// 	for _, a := range s {
+// 		if a == e {
+// 			return true
+// 		}
+// 	}
+// 	return false
+// }
+
+func getOrientationExif(file string) ([]byte, error) {
+	orient, err := extractOrientation(file)
+	if err != nil {
+		return nil, err
+	}
+
+	fmt.Println(orient)
+
+	return createExifData(orient)
+
+	// fmt.Println("root:")
+	// fmt.Println(index.RootIfd.String())
+	// fmt.Println("ifds:")
+	// for _, ifd := range index.Ifds {
+	// 	fmt.Println(ifd.String())
+	// }
+	// fmt.Println("tree:")
+	// for key, val := range index.Tree {
+	// 	fmt.Printf("key:%d val:%s\n", key, val.String())
+	// }
+	// fmt.Println("lookup:")
+	// for key, val := range index.Lookup {
+	// 	fmt.Printf("key:%s val:%s\n", key, val.String())
+	// }
+
+	// tagIdsToKeep := make([]uint16, 0)
+	// tagIdsToDelete := make([]uint16, 0)
+	// tagNamesToFind := []string{"Orientation", "ExifTag", "ColorSpace", "PixelXDimension", "PixelYDimension"}
+	// err = index.RootIfd.EnumerateTagsRecursively(func(i *exif.Ifd, ite *exif.IfdTagEntry) error {
+	// 	if contains(tagNamesToFind, ite.TagName()) {
+	// 		tagIdsToKeep = append(tagIdsToKeep, ite.TagId())
+	// 	} else {
+	// 		tagIdsToDelete = append(tagIdsToDelete, ite.TagId())
+	// 	}
+	// 	return nil
+	// })
+	// if err != nil {
+	// 	return nil, err
+	// }
+
+	// fmt.Println("Keep:")
+	// for _, val := range tagIdsToKeep {
+	// 	fmt.Printf("%x ", val)
+	// }
+	// fmt.Println()
+	// fmt.Println("Delete:")
+	// for _, val := range tagIdsToDelete {
+	// 	fmt.Printf("%x ", val)
+	// }
+	// fmt.Println()
+
+	// tagsToKeep := make([]*exif.IfdTagEntry, 0)
+	// tagNamesToFind := []string{"Orientation", "ExifTag", "ColorSpace", "PixelXDimension", "PixelYDimension"}
+	// for _, ifd := range index.Tree {
+	// 	for i := 0; i < len(tagNamesToFind); {
+	// 		tagName := tagNamesToFind[i]
+	// 		tagsFound, err := ifd.FindTagWithName(tagName)
+	// 		if err != nil {
+	// 			i++
+	// 			continue
+	// 		}
+	// 		if tagsFound != nil {
+	// 			tagsToKeep = append(tagsToKeep, tagsFound...)
+	// 			tagNamesToFind = append(tagNamesToFind[:i], tagNamesToFind[i+1:]...)
+	// 		} else {
+	// 			i++
+	// 		}
+	// 	}
+	// }
+
+	// tagIds := make([]uint16, len(tagsToKeep))
+	// for i, tag := range tagsToKeep {
+	// 	tagIds[i] = tag.TagId()
+	// }
+	// fmt.Println(tagIds)
+
+	//next := index.RootIfd.NextIfd().String()
+	// fmt.Println(next)
+	//children := index.RootIfd.Children()
+	//ifds := []*exif.Ifd{index.RootIfd}
+	//ifds = append(ifds, children...)
+
+	// ib := exif.NewIfdBuilderFromExistingChain(index.RootIfd)
+
+	// for _, tagIdToDelete := range tagIdsToDelete {
+	// 	n, err := ib.DeleteAll(tagIdToDelete)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	fmt.Printf("%d deleted. TagID: %x\n", n, tagIdToDelete)
+	// }
+
+	// fmt.Println("ifd tree:")
+	// ib.PrintIfdTree()
+	// fmt.Println("tag tree:")
+	// ib.PrintTagTree()
+
+	// for ib != nil {
+	// 	fmt.Println("IFD Tree")
+	// 	ib.PrintIfdTree()
+	// 	fmt.Println("Tag tree")
+	// 	ib.PrintTagTree()
+	// 	for _, tagIdToDelete := range tagIdsToDelete {
+	// 		n, err := ib.DeleteAll(tagIdToDelete)
+	// 		if err != nil {
+	// 			return nil, err
+	// 		}
+	// 		fmt.Printf("%d deleted. TagID: %x\n", n, tagIdToDelete)
+	// 	}
+	// 	ib, err = ib.NextIb()
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// }
+
+	// err = index.RootIfd.EnumerateTagsRecursively(func(i *exif.Ifd, ite *exif.IfdTagEntry) error {
+	// 	fmt.Println("i:")
+	// 	fmt.Println(i.String())
+	// 	fmt.Println("ite:")
+	// 	fmt.Println(ite.String())
+	// 	return nil
+	// })
+
+	// ib := exif.NewIfdBuilder(im, ti, index.RootIfd.IfdIdentity(), index.RootIfd.ByteOrder())
+	// err = ib.AddTagsFromExisting(index.RootIfd, tagIds, nil)
+	// if err != nil {
+	// 	return nil, err
+	// }
+
+	// be := exif.NewIfdByteEncoder()
+	// return be.EncodeToExif(ib)
+}
+
+func createExifData(orient uint16) ([]byte, error) {
+	im, err := exifcommon.NewIfdMappingWithStandard()
+	if err != nil {
+		return nil, err
+	}
+	ti := exif.NewTagIndex()
+	ib := exif.NewIfdBuilder(im, ti, exifcommon.IfdStandardIfdIdentity, exifcommon.EncodeDefaultByteOrder)
+	err = ib.AddStandardWithName("Orientation", []uint16{orient})
+	if err != nil {
+		return nil, err
+	}
+	be := exif.NewIfdByteEncoder()
+	return be.EncodeToExif(ib)
+}
+
+func extractOrientation(file string) (uint16, error) {
+	exifByteSlice, err := exif.SearchFileAndExtractExif(file)
+	if err != nil {
+		return 0, err
+	}
+	im, err := exifcommon.NewIfdMappingWithStandard()
+	if err != nil {
+		return 0, err
+	}
+	ti := exif.NewTagIndex()
+	_, index, err := exif.Collect(im, ti, exifByteSlice)
+	if err != nil {
+		return 0, err
+	}
+
+	orient := uint16(1)
+
+	err = index.RootIfd.EnumerateTagsRecursively(func(i *exif.Ifd, ite *exif.IfdTagEntry) error {
+		if ite.TagName() == "Orientation" {
+			val, err := ite.Value()
+			if err != nil {
+				return err
+			}
+
+			switch val := val.(type) {
+			case []uint16:
+				if len(val) != 1 {
+					return fmt.Errorf("orientation captures multiple values %s", file)
+				}
+				orient = val[0]
+			case uint16:
+				orient = val
+			default:
+				return fmt.Errorf("orientation value is not of right type %s", file)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return orient, nil
+}
+
+func getImageFromHeic(file string) (image.Image, error) {
+	f, err := os.Open(file)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return goheif.Decode(f)
+}
+
+func writeJpgFile(file string, exifByteSlice []byte, image image.Image) error {
+	f, err := os.Create(file)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	w, err := newWriterExif(f, exifByteSlice)
+	if err != nil {
+		return err
+	}
+	return jpeg.Encode(w, image, &jpeg.Options{Quality: *qual})
+}
+
+// Skip Writer for exif writing
 type writerSkipper struct {
 	w           io.Writer
 	bytesToSkip int
@@ -203,3 +378,11 @@ func newWriterExif(w io.Writer, exif []byte) (io.Writer, error) {
 
 	return writer, nil
 }
+
+// type myIfdBuilder struct {
+// 	exif.IfdBuilder
+// }
+
+// func (ib *myIfdBuilder) DeleteTags(tags []uint16) (int, error) {
+// 	ib.
+// }
