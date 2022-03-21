@@ -6,16 +6,20 @@ import (
 	"fmt"
 	"image"
 	"image/jpeg"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"text/template"
 
 	"github.com/disintegration/imaging"
 	exif "github.com/dsoprea/go-exif/v3"
 	exifcommon "github.com/dsoprea/go-exif/v3/common"
 	"github.com/jdeng/goheif"
+	"github.com/kolesa-team/go-webp/encoder"
+	"github.com/kolesa-team/go-webp/webp"
 )
 
 var pre *string
@@ -23,6 +27,12 @@ var dpr *int
 var qual *int
 var widths []int
 var wg sync.WaitGroup
+
+type imageFilePath struct {
+	FileType  string
+	Width     int
+	FilePaths []string
+}
 
 func main() {
 	flag.Usage = usage
@@ -41,7 +51,7 @@ func main() {
 	}
 
 	if *qual < 1 || *qual > 100 {
-		fmt.Fprintf(os.Stderr, "Invalid quality setting: %d. Must be value 1-100.", *qual)
+		fmt.Fprintf(os.Stderr, "invalid quality setting: %d. Must be value 1-100\n", *qual)
 		flag.Usage()
 		os.Exit(1)
 	}
@@ -69,7 +79,7 @@ func getWidths(widths *string) []int {
 	for i, widthString := range widthStringSlice {
 		parsedInt, err := strconv.Atoi(widthString)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Invalid, non-integer width provided: %s, ignoring.", widthString)
+			fmt.Fprintf(os.Stderr, "invalid, non-integer width provided: %s, ignoring\n", widthString)
 			continue
 		}
 		widthIntSlice[i] = parsedInt
@@ -83,39 +93,139 @@ func usage() {
 }
 
 func generate(file string) {
+	imageFilePaths := make([]imageFilePath, 0)
 	defer wg.Done()
 	orient, err := getOrientation(file)
 	if err != nil {
-		// handle
-		return
+		fmt.Fprintf(os.Stderr, "could not get orientation data for file %s\n", file)
 	}
 	img, err := getImage(file)
 	if err != nil {
-		// handle
+		fmt.Fprintf(os.Stderr, "could not get image data for file %s\n", file)
 		return
 	}
-	fmt.Println(img.Bounds())
 	img, err = transformAccordingly(img, orient)
 	if err != nil {
-		// handle
+		fmt.Fprintf(os.Stderr, "could not transform image data for file %s\n", file)
 		return
 	}
-	fmt.Println(img.Bounds())
-	img = resizeAccordingly(img, widths)
-	fmt.Println(img.Bounds())
-	extension := filepath.Ext(file)
-	fileName := strings.TrimSuffix(file, extension)
-	outFile, err := os.Create(fmt.Sprintf("%s.jpg", fileName))
+	for _, width := range widths {
+		imgs := resizeAccordingly(img, width)
+		ifps, err := writeImages(file, imgs, width)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "could not write output images for file %s\n", file)
+			return
+		}
+		imageFilePaths = append(imageFilePaths, ifps...)
+	}
+	err = printHTML(imageFilePaths)
 	if err != nil {
-		// handle
+		fmt.Fprintf(os.Stderr, "could not write HTML picture element for file %s\n", file)
 		return
 	}
-	defer outFile.Close()
-	jpeg.Encode(outFile, img, &jpeg.Options{Quality: *qual})
 }
 
-func resizeAccordingly(img image.Image, widths []int) image.Image {
-	return imaging.Resize(img, widths[0], 0, imaging.Lanczos)
+func printHTML(ifps []imageFilePath) error {
+	templateString := `
+	<picture>
+		{{- range . }}
+			<source media="(min-width: )" type="image/{{ .FileType }}" srcset="{{ range $index, $element := .FilePaths }}{{.}},{{ end }}"
+		{{- end }}
+	</picture>
+	`
+	tmpl, err := template.New("picture").Parse(templateString)
+	if err != nil {
+		return err
+	}
+	return tmpl.Execute(os.Stdout, ifps)
+}
+
+func writeImages(file string, imgs []image.Image, width int) ([]imageFilePath, error) {
+	imageFilePaths := make([]imageFilePath, 0)
+	extension := filepath.Ext(file)
+	dirName := strings.TrimSuffix(file, extension)
+	baseDir := filepath.Base(dirName)
+	err := os.MkdirAll(dirName, 0755)
+	if err != nil {
+		return nil, err
+	}
+	fileType := strings.ToLower(strings.Trim(extension, "."))
+	switch fileType {
+	case "heic", "jpg":
+		jpegFilePaths := make([]string, 0)
+		webpFilePaths := make([]string, 0)
+		for i := 1; i <= *dpr; i++ {
+			fileNameNoExt := filepath.Join(dirName, fmt.Sprintf("%dw%dd", width, i))
+			fileName := fmt.Sprintf("%s.jpg", fileNameNoExt)
+			err = writeJpg(fileName, imgs[i-1])
+			if err != nil {
+				return nil, err
+			}
+			jpegFilePaths = append(jpegFilePaths, filepath.Join(*pre, baseDir, fmt.Sprintf("%dw%dd.jpg", width, i)))
+			fileName = fmt.Sprintf("%s.webp", fileNameNoExt)
+			err = writeWebp(fileName, imgs[i-1])
+			if err != nil {
+				return nil, err
+			}
+			webpFilePaths = append(jpegFilePaths, filepath.Join(*pre, baseDir, fmt.Sprintf("%dw%dd.jpg", width, i)))
+		}
+		imageFilePaths = append(imageFilePaths, imageFilePath{FileType: "jpg", Width: width, FilePaths: jpegFilePaths})
+		imageFilePaths = append(imageFilePaths, imageFilePath{FileType: "webp", Width: width, FilePaths: webpFilePaths})
+	case "png":
+		pngFilePaths := make([]string, 0)
+		for i := 1; i <= *dpr; i++ {
+			fileNameNoExt := filepath.Join(dirName, fmt.Sprintf("%dw%dd", width, i))
+			fileName := fmt.Sprintf("%s.png", fileNameNoExt)
+			err = writePng(fileName, imgs[i-1])
+			if err != nil {
+				return nil, err
+			}
+			pngFilePaths = append(pngFilePaths, filepath.Join(*pre, baseDir, fmt.Sprintf("%dw%dd.png", width, i)))
+		}
+		imageFilePaths = append(imageFilePaths, imageFilePath{FileType: "png", Width: width, FilePaths: pngFilePaths})
+	default:
+		return nil, fmt.Errorf("i don't know how to handle %s files", fileType)
+	}
+	return imageFilePaths, nil
+}
+
+func writePng(file string, img image.Image) error {
+	outFile, err := os.Create(file)
+	if err != nil {
+		return err
+	}
+	defer outFile.Close()
+	return png.Encode(outFile, img)
+}
+
+func writeWebp(file string, img image.Image) error {
+	outFile, err := os.Create(file)
+	if err != nil {
+		return err
+	}
+	defer outFile.Close()
+	options, err := encoder.NewLossyEncoderOptions(encoder.PresetDefault, float32(*qual))
+	if err != nil {
+		return err
+	}
+	return webp.Encode(outFile, img, options)
+}
+
+func writeJpg(file string, img image.Image) error {
+	outFile, err := os.Create(file)
+	if err != nil {
+		return err
+	}
+	defer outFile.Close()
+	return jpeg.Encode(outFile, img, &jpeg.Options{Quality: *qual})
+}
+
+func resizeAccordingly(img image.Image, width int) []image.Image {
+	images := make([]image.Image, 0)
+	for i := 1; i <= *dpr; i++ {
+		images = append(images, imaging.Resize(img, width*i, 0, imaging.Lanczos))
+	}
+	return images
 }
 
 func transformAccordingly(img image.Image, orient uint16) (image.Image, error) {
@@ -176,7 +286,7 @@ func getImage(file string) (image.Image, error) {
 		fmt.Println("working with heic")
 		return getImageFromHeic(file)
 	default:
-		return nil, fmt.Errorf("I don't know how to handle %s files", fileType)
+		return nil, fmt.Errorf("i don't know how to handle %s files", fileType)
 	}
 }
 
@@ -186,7 +296,7 @@ func getImageFromPng(file string) (image.Image, error) {
 		return nil, err
 	}
 	defer f.Close()
-	return jpeg.Decode(f)
+	return png.Decode(f)
 }
 
 func getImageFromJpeg(file string) (image.Image, error) {
