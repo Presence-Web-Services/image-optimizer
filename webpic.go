@@ -28,10 +28,17 @@ var qual *int
 var widths []int
 var wg sync.WaitGroup
 
+var stdoutMutex sync.Mutex
+
+type filePath struct {
+	Dpr  uint
+	Path string
+}
+
 type imageFilePath struct {
 	FileType  string
-	Width     int
-	FilePaths []string
+	Width     uint
+	FilePaths []filePath
 }
 
 func main() {
@@ -56,15 +63,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Println("Prefix:", *pre)
-	fmt.Println("DPR:", *dpr)
-	fmt.Println("Qual:", *qual)
-	for _, width := range widths {
-		fmt.Println("Width:", width)
+	if *dpr < 1 {
+		fmt.Fprintf(os.Stderr, "invalid dpr setting: %d. Must be value 1 or greater\n", *dpr)
+		flag.Usage()
+		os.Exit(1)
 	}
 
+	// fmt.Println("Prefix:", *pre)
+	// fmt.Println("DPR:", *dpr)
+	// fmt.Println("Qual:", *qual)
+	// for _, width := range widths {
+	// 	fmt.Println("Width:", width)
+	// }
+
 	for _, file := range files {
-		fmt.Println("Input File:", file)
 		wg.Add(1)
 		go generate(file)
 	}
@@ -93,6 +105,7 @@ func usage() {
 }
 
 func generate(file string) {
+	fmt.Println("Generating output for file:", file)
 	imageFilePaths := make([]imageFilePath, 0)
 	defer wg.Done()
 	orient, err := getOrientation(file)
@@ -118,26 +131,55 @@ func generate(file string) {
 		}
 		imageFilePaths = append(imageFilePaths, ifps...)
 	}
-	err = printHTML(imageFilePaths)
+	err = printHTML(imageFilePaths, file)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "could not write HTML picture element for file %s\n", file)
 		return
 	}
 }
 
-func printHTML(ifps []imageFilePath) error {
-	templateString := `
-	<picture>
-		{{- range . }}
-			<source media="(min-width: )" type="image/{{ .FileType }}" srcset="{{ range $index, $element := .FilePaths }}{{.}},{{ end }}"
-		{{- end }}
-	</picture>
-	`
+func printHTML(ifps []imageFilePath, file string) error {
+	lastIndex := len(ifps) - 1
+	lastWidthIndex := lastIndex
+	lastWidth := ifps[lastWidthIndex].Width
+	for i := lastWidthIndex; i >= 0; i-- {
+		if ifps[i].Width == lastWidth {
+			lastWidthIndex = i
+		} else {
+			break
+		}
+	}
+	templateString := `<picture>
+{{- range $i, $ifp := .Ifps -}}
+{{- if (ne $i $.LastIndex) }}
+	<source {{- if lt $i $.LastWidthIndex }} media="(min-width: )"{{ end }} type="image/{{$ifp.FileType}}" srcset="{{ range $j, $e := $ifp.FilePaths }}{{ if (ne $j 0) }}, {{ end }}{{ $e.Path }}{{ if (ne $e.Dpr 1) }} {{ $e.Dpr }}x{{ end }}{{ end }}">
+{{- else }}
+	<img {{range $j, $e := $ifp.FilePaths }}{{ if (eq $j 0) }}src="{{ $e.Path }}{{ if (gt (len $ifp.FilePaths) 1) }}" srcset="{{ end }}{{ else }}{{ if (ne $j 1) }}, {{ end }}{{ $e.Path }} {{ $e.Dpr}}x{{ end }}{{ end }}" alt="" width="{{ $ifp.Width }}">
+{{- end -}}
+{{- end }}
+</picture>
+`
+
 	tmpl, err := template.New("picture").Parse(templateString)
 	if err != nil {
 		return err
 	}
-	return tmpl.Execute(os.Stdout, ifps)
+	stdoutMutex.Lock()
+	fmt.Println("HTML for file:", file)
+	err = tmpl.Execute(os.Stdout, struct {
+		Ifps           []imageFilePath
+		LastIndex      uint
+		LastWidthIndex uint
+	}{
+		Ifps:           ifps,
+		LastIndex:      uint(lastIndex),
+		LastWidthIndex: uint(lastWidthIndex),
+	})
+	stdoutMutex.Unlock()
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func writeImages(file string, imgs []image.Image, width int) ([]imageFilePath, error) {
@@ -152,8 +194,8 @@ func writeImages(file string, imgs []image.Image, width int) ([]imageFilePath, e
 	fileType := strings.ToLower(strings.Trim(extension, "."))
 	switch fileType {
 	case "heic", "jpg":
-		jpegFilePaths := make([]string, 0)
-		webpFilePaths := make([]string, 0)
+		jpegFilePaths := make([]filePath, 0)
+		webpFilePaths := make([]filePath, 0)
 		for i := 1; i <= *dpr; i++ {
 			fileNameNoExt := filepath.Join(dirName, fmt.Sprintf("%dw%dd", width, i))
 			fileName := fmt.Sprintf("%s.jpg", fileNameNoExt)
@@ -161,18 +203,18 @@ func writeImages(file string, imgs []image.Image, width int) ([]imageFilePath, e
 			if err != nil {
 				return nil, err
 			}
-			jpegFilePaths = append(jpegFilePaths, filepath.Join(*pre, baseDir, fmt.Sprintf("%dw%dd.jpg", width, i)))
+			jpegFilePaths = append(jpegFilePaths, filePath{Dpr: uint(i), Path: filepath.Join(*pre, baseDir, fmt.Sprintf("%dw%dd.jpg", width, i))})
 			fileName = fmt.Sprintf("%s.webp", fileNameNoExt)
 			err = writeWebp(fileName, imgs[i-1])
 			if err != nil {
 				return nil, err
 			}
-			webpFilePaths = append(jpegFilePaths, filepath.Join(*pre, baseDir, fmt.Sprintf("%dw%dd.jpg", width, i)))
+			webpFilePaths = append(webpFilePaths, filePath{Dpr: uint(i), Path: filepath.Join(*pre, baseDir, fmt.Sprintf("%dw%dd.webp", width, i))})
 		}
-		imageFilePaths = append(imageFilePaths, imageFilePath{FileType: "jpg", Width: width, FilePaths: jpegFilePaths})
-		imageFilePaths = append(imageFilePaths, imageFilePath{FileType: "webp", Width: width, FilePaths: webpFilePaths})
+		imageFilePaths = append(imageFilePaths, imageFilePath{FileType: "webp", Width: uint(width), FilePaths: webpFilePaths})
+		imageFilePaths = append(imageFilePaths, imageFilePath{FileType: "jpeg", Width: uint(width), FilePaths: jpegFilePaths})
 	case "png":
-		pngFilePaths := make([]string, 0)
+		pngFilePaths := make([]filePath, 0)
 		for i := 1; i <= *dpr; i++ {
 			fileNameNoExt := filepath.Join(dirName, fmt.Sprintf("%dw%dd", width, i))
 			fileName := fmt.Sprintf("%s.png", fileNameNoExt)
@@ -180,9 +222,9 @@ func writeImages(file string, imgs []image.Image, width int) ([]imageFilePath, e
 			if err != nil {
 				return nil, err
 			}
-			pngFilePaths = append(pngFilePaths, filepath.Join(*pre, baseDir, fmt.Sprintf("%dw%dd.png", width, i)))
+			pngFilePaths = append(pngFilePaths, filePath{Dpr: uint(i), Path: filepath.Join(*pre, baseDir, fmt.Sprintf("%dw%dd.png", width, i))})
 		}
-		imageFilePaths = append(imageFilePaths, imageFilePath{FileType: "png", Width: width, FilePaths: pngFilePaths})
+		imageFilePaths = append(imageFilePaths, imageFilePath{FileType: "png", Width: uint(width), FilePaths: pngFilePaths})
 	default:
 		return nil, fmt.Errorf("i don't know how to handle %s files", fileType)
 	}
@@ -277,13 +319,10 @@ func getImage(file string) (image.Image, error) {
 	fileType := strings.ToLower(strings.Trim(extension, "."))
 	switch fileType {
 	case "jpg":
-		fmt.Println("working with jpg")
 		return getImageFromJpeg(file)
 	case "png":
-		fmt.Println("working with png")
 		return getImageFromPng(file)
 	case "heic":
-		fmt.Println("working with heic")
 		return getImageFromHeic(file)
 	default:
 		return nil, fmt.Errorf("i don't know how to handle %s files", fileType)
