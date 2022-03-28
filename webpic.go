@@ -97,9 +97,9 @@ func usage() {
 }
 
 func generate(file string) {
+	defer wg.Done()
 	fmt.Println("Generating output for file:", file)
 	imageFilePaths := make([]imageFilePath, 0)
-	defer wg.Done()
 	orient, err := getOrientation(file)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "could not get orientation data for file %s\n", file)
