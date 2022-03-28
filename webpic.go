@@ -356,29 +356,6 @@ func getImageFromHeic(file string) (image.Image, error) {
 	return goheif.Decode(f)
 }
 
-func getOrientationExif(file string) ([]byte, error) {
-	orient, err := getOrientation(file)
-	if err != nil {
-		return nil, err
-	}
-	return createExifData(orient)
-}
-
-func createExifData(orient uint16) ([]byte, error) {
-	im, err := exifcommon.NewIfdMappingWithStandard()
-	if err != nil {
-		return nil, err
-	}
-	ti := exif.NewTagIndex()
-	ib := exif.NewIfdBuilder(im, ti, exifcommon.IfdStandardIfdIdentity, exifcommon.EncodeDefaultByteOrder)
-	err = ib.AddStandardWithName("Orientation", []uint16{orient})
-	if err != nil {
-		return nil, err
-	}
-	be := exif.NewIfdByteEncoder()
-	return be.EncodeToExif(ib)
-}
-
 func getOrientation(file string) (uint16, error) {
 	exifByteSlice, err := exif.SearchFileAndExtractExif(file)
 	if err != nil {
