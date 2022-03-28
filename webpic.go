@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"flag"
 	"fmt"
 	"image"
@@ -68,13 +67,6 @@ func main() {
 		flag.Usage()
 		os.Exit(1)
 	}
-
-	// fmt.Println("Prefix:", *pre)
-	// fmt.Println("DPR:", *dpr)
-	// fmt.Println("Qual:", *qual)
-	// for _, width := range widths {
-	// 	fmt.Println("Width:", width)
-	// }
 
 	for _, file := range files {
 		wg.Add(1)
@@ -273,11 +265,7 @@ func resizeAccordingly(img image.Image, width int) []image.Image {
 func transformAccordingly(img image.Image, orient uint16) (image.Image, error) {
 	switch orient {
 	case 1:
-		if imgNrgba, ok := img.(*image.NRGBA); ok {
-			return imgNrgba, nil
-		} else {
-			return nil, errors.New("could not generate nrgba image")
-		}
+		return img, nil
 	case 2:
 		// flip horizontally
 		return imaging.FlipH(img), nil
@@ -306,11 +294,7 @@ func transformAccordingly(img image.Image, orient uint16) (image.Image, error) {
 		// rotate 90
 		return imaging.Rotate90(img), nil
 	default:
-		if imgNrgba, ok := img.(*image.NRGBA); ok {
-			return imgNrgba, fmt.Errorf("cannot work with orientation %d for image", orient)
-		} else {
-			return nil, fmt.Errorf("cannot work with orientation %d for image", orient)
-		}
+		return img, fmt.Errorf("cannot work with orientation %d for image", orient)
 	}
 }
 
